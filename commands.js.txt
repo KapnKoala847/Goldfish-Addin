@@ -1,0 +1,189 @@
+// Constants
+const GOLD_FISH_FORMAT_VERSION = "1.3";
+const HEADER_RANGE = "A1:E1";
+const EXPECTED_HEADER = ["Item/individual", "What is it about", "Next action", "Reason", "Dependencies"];
+const SETTINGS_KEY = "IsGoldfishOn";
+
+// Helper functions
+function normalize(text) {
+if (!text) return "";
+return text.toString().toLowerCase().trim().replace(/\s+/g, ' ').replace(/[\u200B\u00A0]/g, '');
+}
+
+function getLastRow(sheet, context) {
+const usedRange = sheet.getUsedRange();
+usedRange.load("rowCount");
+return context.sync().then(() => usedRange.rowCount);
+}
+
+Office.onReady(() => {
+console.log("Goldfish Format V1.3 loaded");
+});
+
+Office.actions.associate("onOpen", async () => {
+await Excel.run(async (context) => {
+const sheet = context.workbook.worksheets.getActiveWorksheet();
+const headerRange = sheet.getRange(HEADER_RANGE);
+headerRange.load("values");
+await context.sync();
+const current = headerRange.values[0];
+if (JSON.stringify(current)!== JSON.stringify(EXPECTED_HEADER)) {
+headerRange.values = [EXPECTED_HEADER];
+headerRange.format.fill.color = "yellow";
+headerRange.format.autofitColumns();
+}
+await context.sync();
+});
+});
+
+Office.actions.associate("toggleGoldfish", async () => {
+await Excel.run(async (context) => {
+const wb = context.workbook;
+let isOn = wb.settings.getItemOrNullObject(SETTINGS_KEY);
+isOn.load("value");
+await context.sync();
+const newValue =!isOn.value;
+wb.settings.set(SETTINGS_KEY, newValue);
+await context.sync();
+console.log("Goldfish ON:", newValue);
+});
+});
+
+Office.actions.associate("onChanged", async (eventArgs) => {
+await Excel.run(async (context) => {
+const wb = context.workbook;
+let isOn = wb.settings.getItemOrNullObject(SETTINGS_KEY);
+isOn.load("value");
+await context.sync();
+if (!isOn.value) return;
+
+const sheet = context.workbook.worksheets.getActiveWorksheet();
+const changedRange = eventArgs.details.rangeAddress;
+const range = sheet.getRange(changedRange);
+range.load("columnIndex, rowIndex, values");
+await context.sync();
+
+const col = range.columnIndex;
+const row = range.rowIndex;
+const val = range.values[0][0];
+
+// Auto-normalize Col A + Col E
+if (col === 0 || col === 4) {
+const clean = normalize(val);
+if (val!== clean) {
+range.values = [[clean]];
+await context.sync();
+}
+}
+});
+});
+
+Office.actions.associate("validateCircular", async (eventArgs) => {
+await Excel.run(async (context) => {
+const wb = context.workbook;
+let isOn = wb.settings.getItemOrNullObject(SETTINGS_KEY);
+isOn.load("value");
+await context.sync();
+if (!isOn.value) return;
+
+const sheet = context.workbook.worksheets.getActiveWorksheet();
+const range = sheet.getRange(eventArgs.details.rangeAddress);
+range.load("columnIndex, rowIndex, formula");
+await context.sync();
+
+if (range.columnIndex === 4 && range.formula[0][0] && range.formula[0][0].startsWith("=")) {
+const lastRow = await getLastRow(sheet, context);
+// Allow formulas only in final row
+if (range.rowIndex < lastRow - 1) {
+range.clear();
+await context.sync();
+}
+}
+});
+});
+
+Office.actions.associate("protectRename", async (eventArgs) => {
+await Excel.run(async (context) => {
+const wb = context.workbook;
+let isOn = wb.settings.getItemOrNullObject(SETTINGS_KEY);
+isOn.load("value");
+await context.sync();
+if (!isOn.value) return;
+
+const sheet = context.workbook.worksheets.getActiveWorksheet();
+const range = sheet.getRange(eventArgs.details.rangeAddress);
+range.load("columnIndex, value");
+await context.sync();
+
+if (range.columnIndex === 0) {
+const oldValue = range.value;
+const newValue = eventArgs.details.valueAfter;
+if (oldValue && oldValue!== newValue) {
+range.value = oldValue;
+await context.sync();
+}
+}
+});
+});
+
+Office.actions.associate("checkDuplicate", async (eventArgs) => {
+await Excel.run(async (context) => {
+const wb = context.workbook;
+let isOn = wb.settings.getItemOrNullObject(SETTINGS_KEY);
+isOn.load("value");
+await context.sync();
+if (!isOn.value) return;
+
+const sheet = context.workbook.worksheets.getActiveWorksheet();
+const usedRange = sheet.getUsedRange();
+usedRange.load("values");
+await context.sync();
+
+const values = usedRange.values;
+const seen = new Map();
+for (let r = 1; r < values.length; r++) {
+const item = values[r][0];
+if (!item) continue;
+if (seen.has(item)) {
+sheet.getCell(r, 0).format.fill.color = "red";
+} else {
+seen.set(item, r);
+sheet.getCell(r, 0).format.fill.clear();
+}
+}
+await context.sync();
+});
+});
+
+// NEW: Right-click command to scan dependencies
+Office.actions.associate("scanDependencies", async () => {
+await Excel.run(async (context) => {
+const sheet = context.workbook.worksheets.getActiveWorksheet();
+const usedRange = sheet.getUsedRange();
+usedRange.load("values, formulas, rowCount");
+await context.sync();
+
+const lastRow = usedRange.rowCount - 1; // 0-indexed final row
+const rows = usedRange.rowCount;
+const deps = [];
+
+// Scan B-E above final row
+for (let r = 1; r < lastRow; r++) {
+for (let c = 1; c < 5; c++) {
+const formula = usedRange.formulas[r][c];
+if (formula && formula.startsWith("=")) {
+const refs = formula.match(/[A-E]\d+/g) || [];
+if (refs.length > 0) {
+deps.push(`Row ${r+1}: ${refs.join(", ")}`);
+}
+}
+}
+}
+
+// Write to final row Col E
+const output = deps.length > 0? deps.join("; ") : "No dependencies found";
+sheet.getCell(lastRow, 4).values = [[output]];
+sheet.getCell(lastRow, 4).format.fill.color = "#D9EAD3"; // light green
+await context.sync();
+});
+});

@@ -1,0 +1,5 @@
+@echo off
+echo Removing Goldfish Format V1.3...
+npm stop
+echo Done. You can now delete the GoldfishV13_Master folder.
+pause

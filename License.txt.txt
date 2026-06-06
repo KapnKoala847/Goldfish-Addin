@@ -1,0 +1,10 @@
+Goldfish Format v1.3
+Copyright 2026 Matt Zielinski
+
+All rights reserved.
+
+This software and documentation are proprietary.
+No part may be copied, modified, distributed, or sold
+without express written permission from Matt Zielinski.
+
+For licensing inquiries: Alldayerrday227@gmail.com
